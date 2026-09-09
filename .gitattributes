@@ -31,3 +31,11 @@ target/a73xq/patches/wpss/vendor/firmware/** binary
 target/m52xq/patches/wpss/vendor/firmware/** binary
 target/r9s/patches/vendor/vendor/** binary
 target/r8s/patches/vendor/vendor/bin/hw/wpa_supplicant binary
+
+# Galaxy S8/S8+ (exynos8895) prebuilt blobs
+platform/exynos8895/patches/abvendor/vendor/** binary
+platform/exynos8895/patches/blobs/system/** binary
+target/dreamlte/patches/kernel/** binary
+target/dreamlte/patches/vendor/vendor/** binary
+target/dream2lte/patches/kernel/** binary
+target/dream2lte/patches/vendor/vendor/** binary

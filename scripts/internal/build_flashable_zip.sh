@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # [
-source "$SRC_DIR/scripts/utils/build_utils.sh" || exit 1
+source "$SRC_DIR/scripts/utils/install_utils.sh" || exit 1
 
 SOURCE_FIRMWARE_PATH="$(cut -d "/" -f 1 -s <<< "$SOURCE_FIRMWARE")_$(cut -d "/" -f 2 -s <<< "$SOURCE_FIRMWARE")"
 TARGET_FIRMWARE_PATH="$(cut -d "/" -f 1 -s <<< "$TARGET_FIRMWARE")_$(cut -d "/" -f 2 -s <<< "$TARGET_FIRMWARE")"
@@ -89,12 +89,29 @@ GENERATE_BUILD_INFO()
     local BUILD_INFO_FILE="$TMP_DIR/build_info.txt"
 
     {
-        echo "device=$TARGET_CODENAME"
-        echo "version=$ROM_VERSION"
-        echo "timestamp=$ROM_BUILD_TIMESTAMP"
-        echo "security_patch_version=$(GET_PROP "system" "ro.build.version.security_patch")"
-        # TODO
-        echo "incremental=0"
+        echo -n "device="
+        [ "$(GET_PROP "system" "ro.unica.device")" ] && GET_PROP "system" "ro.unica.device" || echo "$TARGET_CODENAME"
+        [ "$TARGET_ASSERT_MODEL" ] && echo "model=${TARGET_ASSERT_MODEL//:/;}"
+        echo "name=$TARGET_NAME"
+        echo -n "codename="
+        [ "$(GET_PROP "system" "ro.unica.codename")" ] && GET_PROP "system" "ro.unica.codename" || echo "$ROM_CODENAME"
+        echo -n "version="
+        [ "$(GET_PROP "system" "ro.unica.version")" ] && GET_PROP "system" "ro.unica.version" || echo "$ROM_VERSION"
+        echo -n "timestamp="
+        [ "$(GET_PROP "system" "ro.unica.timestamp")" ] && GET_PROP "system" "ro.unica.timestamp" || echo "$ROM_BUILD_TIMESTAMP"
+        echo "os_version=$(GET_PROP "system" "ro.build.version.release")"
+        echo "oneui_version=$(GET_PROP "system" "ro.build.version.oneui")"
+        echo "build_incremental=$(GET_PROP "system" "ro.build.version.incremental")"
+        echo "build_date=$(GET_PROP "system" "ro.build.date.utc")"
+        echo "security_patch=$(GET_PROP "system" "ro.build.version.security_patch")"
+        echo "source_fingerprint=$SOURCE_FINGERPRINT"
+        echo "target_fingerprint=$TARGET_FINGERPRINT"
+        echo "use_dynamic_partitions=$TARGET_USE_DYNAMIC_PARTITIONS"
+        if $TARGET_USE_DYNAMIC_PARTITIONS; then
+            echo "super_partition_size=$TARGET_SUPER_PARTITION_SIZE"
+            echo "super_partition_group=$TARGET_SUPER_GROUP_NAME"
+            echo "super_${TARGET_SUPER_GROUP_NAME}_group_size=$(GET_SUPER_GROUP_SIZE)"
+        fi
     } > "$BUILD_INFO_FILE"
 }
 
@@ -260,14 +277,6 @@ GENERATE_UPDATER_SCRIPT()
     local HAS_INIT_BOOT=false
     local HAS_VENDOR_BOOT=false
     local HAS_SUPER_EMPTY=false
-    local HAS_SYSTEM=false
-    local HAS_VENDOR=false
-    local HAS_PRODUCT=false
-    local HAS_SYSTEM_EXT=false
-    local HAS_ODM=false
-    local HAS_VENDOR_DLKM=false
-    local HAS_ODM_DLKM=false
-    local HAS_SYSTEM_DLKM=false
 
     [ -f "$TMP_DIR/up_param.bin" ] && HAS_UP_PARAM=true
     [ -f "$TMP_DIR/lk3rd.img" ] && HAS_LK3RD=true
@@ -276,14 +285,9 @@ GENERATE_UPDATER_SCRIPT()
     [ -f "$TMP_DIR/init_boot.img" ] && HAS_INIT_BOOT=true
     [ -f "$TMP_DIR/vendor_boot.img" ] && HAS_VENDOR_BOOT=true
     [ -f "$TMP_DIR/unsparse_super_empty.img" ] && HAS_SUPER_EMPTY=true
-    [ -f "$TMP_DIR/system.new.dat${BROTLI_EXTENSION}" ] && HAS_SYSTEM=true
-    [ -f "$TMP_DIR/vendor.new.dat${BROTLI_EXTENSION}" ] && HAS_VENDOR=true && PARTITION_COUNT=$((PARTITION_COUNT + 1))
-    [ -f "$TMP_DIR/product.new.dat${BROTLI_EXTENSION}" ] && HAS_PRODUCT=true && PARTITION_COUNT=$((PARTITION_COUNT + 1))
-    [ -f "$TMP_DIR/system_ext.new.dat${BROTLI_EXTENSION}" ] && HAS_SYSTEM_EXT=true && PARTITION_COUNT=$((PARTITION_COUNT + 1))
-    [ -f "$TMP_DIR/odm.new.dat${BROTLI_EXTENSION}" ] && HAS_ODM=true && PARTITION_COUNT=$((PARTITION_COUNT + 1))
-    [ -f "$TMP_DIR/vendor_dlkm.new.dat${BROTLI_EXTENSION}" ] && HAS_VENDOR_DLKM=true && PARTITION_COUNT=$((PARTITION_COUNT + 1))
-    [ -f "$TMP_DIR/odm_dlkm.new.dat${BROTLI_EXTENSION}" ] && HAS_ODM_DLKM=true && PARTITION_COUNT=$((PARTITION_COUNT + 1))
-    [ -f "$TMP_DIR/system_dlkm.new.dat${BROTLI_EXTENSION}" ] && HAS_SYSTEM_DLKM=true && PARTITION_COUNT=$((PARTITION_COUNT + 1))
+    for p in $PARTITIONS_LIST $CSC_PARTITIONS_LIST; do
+        [ -f "$TMP_DIR/$p.new.dat${BROTLI_EXTENSION}" ] && [ "$p" != "system" ] && PARTITION_COUNT=$((PARTITION_COUNT + 1))
+    done
 
     {
         if [ -n "$TARGET_ASSERT_MODEL" ]; then
@@ -310,108 +314,65 @@ GENERATE_UPDATER_SCRIPT()
 
         PRINT_HEADER
 
-        # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#4007
-        echo -e "\n# --- Start patching dynamic partitions ---\n\n"
-        echo -e "# Update dynamic partition metadata\n"
-        echo -n 'assert(update_dynamic_partitions(package_extract_file("dynamic_partitions_op_list")'
-        if $HAS_SUPER_EMPTY; then
-            # https://github.com/LineageOS/android_build/commit/98549f6893c3a93057e2d4cdd1015a93e9473b16
-            # https://github.com/LineageOS/android_bootable_deprecated-ota/commit/e97be4333bd3824b8561c9637e9e6de28bc29da0
-            echo -n ', package_extract_file("unsparse_super_empty.img")'
+        if $TARGET_USE_DYNAMIC_PARTITIONS; then
+            # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#4007
+            echo -e "\n# --- Start patching dynamic partitions ---\n\n"
+            echo -e "# Update dynamic partition metadata\n"
+            echo -n 'assert(update_dynamic_partitions(package_extract_file("dynamic_partitions_op_list")'
+            if $HAS_SUPER_EMPTY; then
+                # https://github.com/LineageOS/android_build/commit/98549f6893c3a93057e2d4cdd1015a93e9473b16
+                # https://github.com/LineageOS/android_bootable_deprecated-ota/commit/e97be4333bd3824b8561c9637e9e6de28bc29da0
+                echo -n ', package_extract_file("unsparse_super_empty.img")'
+            fi
+            echo    '));'
         fi
-        echo    '));'
-        if $HAS_SYSTEM; then
-            echo -e "\n# Patch partition system\n"
-            echo    'ui_print("Patching system image unconditionally...");'
-            echo -n 'show_progress(0.'
-            echo -n "$(bc -l <<< "9 - $PARTITION_COUNT")"
-            echo    '00000, 0);'
-            echo -n 'block_image_update(map_partition("system"), package_extract_file("system.transfer.list"), "'
-            echo -n "system.new.dat${BROTLI_EXTENSION}"
-            echo    '", "system.patch.dat") ||'
-            echo    '  abort("E1001: Failed to update system image.");'
-        fi
-        if $HAS_VENDOR; then
-            echo -e "\n# Patch partition vendor\n"
-            echo    'ui_print("Patching vendor image unconditionally...");'
-            echo    'show_progress(0.100000, 0);'
-            echo -n 'block_image_update(map_partition("vendor"), package_extract_file("vendor.transfer.list"), "'
-            echo -n "vendor.new.dat${BROTLI_EXTENSION}"
-            echo    '", "vendor.patch.dat") ||'
-            echo    '  abort("E2001: Failed to update vendor image.");'
-        fi
-        if $HAS_PRODUCT; then
-            echo -e "\n# Patch partition product\n"
-            echo    'ui_print("Patching product image unconditionally...");'
-            echo    'show_progress(0.100000, 0);'
-            echo -n 'block_image_update(map_partition("product"), package_extract_file("product.transfer.list"), "'
-            echo -n "product.new.dat${BROTLI_EXTENSION}"
-            echo    '", "product.patch.dat") ||'
-            echo    '  abort("E2001: Failed to update product image.");'
-        fi
-        if $HAS_SYSTEM_EXT; then
-            echo -e "\n# Patch partition system_ext\n"
-            echo    'ui_print("Patching system_ext image unconditionally...");'
-            echo    'show_progress(0.100000, 0);'
-            echo -n 'block_image_update(map_partition("system_ext"), package_extract_file("system_ext.transfer.list"), "'
-            echo -n "system_ext.new.dat${BROTLI_EXTENSION}"
-            echo    '", "system_ext.patch.dat") ||'
-            echo    '  abort("E2001: Failed to update system_ext image.");'
-        fi
-        if $HAS_ODM; then
-            echo -e "\n# Patch partition odm\n"
-            echo    'ui_print("Patching odm image unconditionally...");'
-            echo    'show_progress(0.100000, 0);'
-            echo -n 'block_image_update(map_partition("odm"), package_extract_file("odm.transfer.list"), "'
-            echo -n "odm.new.dat${BROTLI_EXTENSION}"
-            echo    '", "odm.patch.dat") ||'
-            echo    '  abort("E2001: Failed to update odm image.");'
-        fi
-        if $HAS_VENDOR_DLKM; then
-            echo -e "\n# Patch partition vendor_dlkm\n"
-            echo    'ui_print("Patching vendor_dlkm image unconditionally...");'
-            echo    'show_progress(0.100000, 0);'
-            echo -n 'block_image_update(map_partition("vendor_dlkm"), package_extract_file("vendor_dlkm.transfer.list"), "'
-            echo -n "vendor_dlkm.new.dat${BROTLI_EXTENSION}"
-            echo    '", "vendor_dlkm.patch.dat") ||'
-            echo    '  abort("E2001: Failed to update vendor_dlkm image.");'
-        fi
-        if $HAS_ODM_DLKM; then
-            echo -e "\n# Patch partition odm_dlkm\n"
-            echo    'ui_print("Patching odm_dlkm image unconditionally...");'
-            echo    'show_progress(0.100000, 0);'
-            echo -n 'block_image_update(map_partition("odm_dlkm"), package_extract_file("odm_dlkm.transfer.list"), "'
-            echo -n "odm_dlkm.new.dat${BROTLI_EXTENSION}"
-            echo    '", "odm_dlkm.patch.dat") ||'
-            echo    '  abort("E2001: Failed to update odm_dlkm image.");'
-        fi
-        if $HAS_SYSTEM_DLKM; then
-            echo -e "\n# Patch partition system_dlkm\n"
-            echo    'ui_print("Patching system_dlkm image unconditionally...");'
-            echo    'show_progress(0.100000, 0);'
-            echo -n 'block_image_update(map_partition("system_dlkm"), package_extract_file("system_dlkm.transfer.list"), "'
-            echo -n "system_dlkm.new.dat${BROTLI_EXTENSION}"
-            echo    '", "system_dlkm.patch.dat") ||'
-            echo    '  abort("E2001: Failed to update system_dlkm image.");'
-        fi
-        echo -e "\n# --- End patching dynamic partitions ---\n"
+        for p in $PARTITIONS_LIST $CSC_PARTITIONS_LIST; do
+            if [ ! -f "$TMP_DIR/$p.new.dat${BROTLI_EXTENSION}" ]; then
+                continue
+            fi
+            $TARGET_USE_DYNAMIC_PARTITIONS && echo -e "\n# Patch partition $p\n"
+            echo -n 'ui_print("Patching '
+            echo -n "$p image unconditionally..."
+            echo    '");'
+            if [[ "$p" == "system" ]]; then
+                echo -n 'show_progress(0.'
+                echo -n "$(bc -l <<< "9 - $PARTITION_COUNT")"
+                echo    '00000, 0);'
+            else
+                echo    'show_progress(0.100000, 0);'
+            fi
+            echo -n "block_image_update("
+            GET_DEVICE_FROM_MOUNTPOINT "/$p"
+            echo -n ', package_extract_file("'
+            echo -n "$p.transfer.list"
+            echo -n '"), "'
+            echo -n "$p.new.dat${BROTLI_EXTENSION}"
+            echo -n '", "'
+            echo -n "$p.patch.dat"
+            echo    '") ||'
+            echo -n '  abort("'
+            [[ "$p" == "system" ]] && echo -n "E1001" || echo -n "E2001"
+            echo -n ": Failed to update $p image."
+            echo    '");'
+        done
+        $TARGET_USE_DYNAMIC_PARTITIONS && echo -e "\n# --- End patching dynamic partitions ---\n"
         if $HAS_DTBO; then
             echo    'ui_print("Full Patching dtbo.img img...");'
-            echo -n 'package_extract_file("dtbo.img", "'
-            echo -n "$TARGET_OS_BOOT_DEVICE_PATH"
-            echo    '/dtbo");'
+            echo -n 'package_extract_file("dtbo.img", '
+            GET_DEVICE_FROM_MOUNTPOINT "/dtbo"
+            echo    ');'
         fi
         if $HAS_INIT_BOOT; then
             echo    'ui_print("Full Patching init_boot.img img...");'
-            echo -n 'package_extract_file("init_boot.img", "'
-            echo -n "$TARGET_OS_BOOT_DEVICE_PATH"
-            echo    '/init_boot");'
+            echo -n 'package_extract_file("init_boot.img", '
+            GET_DEVICE_FROM_MOUNTPOINT "/init_boot"
+            echo    ');'
         fi
         if $HAS_VENDOR_BOOT; then
             echo    'ui_print("Full Patching vendor_boot.img img...");'
-            echo -n 'package_extract_file("vendor_boot.img", "'
-            echo -n "$TARGET_OS_BOOT_DEVICE_PATH"
-            echo    '/vendor_boot");'
+            echo -n 'package_extract_file("vendor_boot.img", '
+            GET_DEVICE_FROM_MOUNTPOINT "/vendor_boot"
+            echo    ');'
         fi
         if $HAS_LK3RD; then
             cp -a "$SRC_DIR/prebuilts/extras/setup-boot.sh" "$TMP_DIR/setup-boot.sh"
@@ -428,15 +389,15 @@ GENERATE_UPDATER_SCRIPT()
         fi
         if ! $HAS_LK3RD && $HAS_BOOT; then
             echo    'ui_print("Installing boot image...");'
-            echo -n 'package_extract_file("boot.img", "'
-            echo -n "$TARGET_OS_BOOT_DEVICE_PATH"
-            echo    '/boot");'
+            echo -n 'package_extract_file("boot.img", '
+            GET_DEVICE_FROM_MOUNTPOINT "/boot"
+            echo    ');'
         fi
         if $HAS_UP_PARAM; then
             echo    'ui_print("Installing up_param image...");'
-            echo -n 'package_extract_file("up_param.bin", "'
-            echo -n "$TARGET_OS_BOOT_DEVICE_PATH"
-            echo    '/up_param");'
+            echo -n 'package_extract_file("up_param.bin", '
+            GET_DEVICE_FROM_MOUNTPOINT "/up_param"
+            echo    ');'
         fi
 
         if [ -f "$SRC_DIR/target/$TARGET_CODENAME/installer/install-end.edify" ]; then
@@ -542,17 +503,26 @@ while IFS= read -r f; do
     PARTITION=$(basename "$f")
     IS_VALID_PARTITION_NAME "$PARTITION" || continue
 
-    "$SRC_DIR/scripts/build_fs_image.sh" "$TARGET_OS_FILE_SYSTEM_TYPE" \
-        -o "$TMP_DIR/$PARTITION.img" -m -S \
-        "$WORK_DIR/$PARTITION" "$WORK_DIR/configs/file_context-$PARTITION" "$WORK_DIR/configs/fs_config-$PARTITION" || exit 1
+    if $TARGET_USE_DYNAMIC_PARTITIONS; then
+        "$SRC_DIR/scripts/build_fs_image.sh" "$TARGET_OS_FILE_SYSTEM_TYPE" \
+            -o "$TMP_DIR/$PARTITION.img" -m -S \
+            "$WORK_DIR/$PARTITION" "$WORK_DIR/configs/file_context-$PARTITION" "$WORK_DIR/configs/fs_config-$PARTITION" || exit 1
+    else
+        _GET_PARTITION_SIZE "$PARTITION" > /dev/null || exit 1
+        "$SRC_DIR/scripts/build_fs_image.sh" "$TARGET_OS_FILE_SYSTEM_TYPE" \
+            -o "$TMP_DIR/$PARTITION.img" -m -S -s "$(_GET_PARTITION_SIZE "$PARTITION")" \
+            "$WORK_DIR/$PARTITION" "$WORK_DIR/configs/file_context-$PARTITION" "$WORK_DIR/configs/fs_config-$PARTITION" || exit 1
+    fi
 done < <(find "$WORK_DIR" -maxdepth 1 -type d)
 LOG_STEP_OUT
 
-LOG "- Building unsparse_super_empty.img"
-BUILD_SUPER_EMPTY
+if $TARGET_USE_DYNAMIC_PARTITIONS; then
+    LOG "- Building unsparse_super_empty.img"
+    BUILD_SUPER_EMPTY
 
-LOG "- Generating dynamic_partitions_op_list"
-GENERATE_OP_LIST
+    LOG "- Generating dynamic_partitions_op_list"
+    GENERATE_OP_LIST
+fi
 
 while IFS= read -r f; do
     PARTITION="$(basename "$f" | sed "s/.img//g")"
