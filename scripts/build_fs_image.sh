@@ -481,7 +481,22 @@ fi
 
 if $AVB_SIGN; then
     LOG "- Signing image with AVB"
-    EVAL "$(GET_AVBTOOL_CMD)" || exit 1
+    AVB_OUT="$(eval "$(GET_AVBTOOL_CMD)" 2>&1)"
+    if [ $? -ne 0 ]; then
+        if grep -q "exceeds maximum image size" <<< "$AVB_OUT"; then
+            LOGW "Image size exceeds the maximum size for partition \"$PARTITION\". Skipping partition"
+            rm -f "$OUTPUT_FILE"
+            LOG_STEP_OUT
+            exit 0
+        fi
+
+        LOGE "Command returned a non-zero exit code"
+        echo -e '\033[0;31m'"$(GET_AVBTOOL_CMD)"'\033[0m' >&2
+        echo -n -e '\033[0;33m' >&2
+        echo -n "$AVB_OUT" >&2
+        echo -e '\033[0m' >&2
+        exit 1
+    fi
 fi
 
 LOG_STEP_OUT
