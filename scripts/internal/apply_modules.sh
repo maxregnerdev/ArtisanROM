@@ -119,7 +119,7 @@ elif [ ! -d "$1" ]; then
 fi
 
 while IFS= read -r f; do
-    APPLY_MODULE "$f"
+    APPLY_MODULE "$f" || LOGW "Module \"$(basename "$f")\" failed, continuing"
 done < <(find "$1" -mindepth 1 -maxdepth 1 -type d | LC_ALL=C sort)
 
 exit 0
