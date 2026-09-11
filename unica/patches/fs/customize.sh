@@ -36,7 +36,25 @@ fi
 EVAL "mkdir -p \"$TMP_DIR\""
 EVAL "cp -a \"$WORK_DIR/kernel/$BOOT_FILE\" \"$TMP_DIR/$BOOT_FILE\""
 
-MKBOOTIMG_ARGS="$(unpack_bootimg --boot_img "$TMP_DIR/$BOOT_FILE" --out "$TMP_DIR/out" --format mkbootimg 2>&1)"
+# Older Samsung boot images (e.g. Exynos 8895) use the pre-header-version
+# Android boot layout where the 32-bit word at offset 40 holds the device
+# tree blob size (dt_size) instead of the boot image header version. The
+# modern unpack_bootimg/mkbootimg tools read that word as header_version
+# and fail on the v3+ code path. Detect that Samsung DTBH legacy format
+# (the appended device tree blob starts with the "DTBH" magic) and handle
+# it with a dedicated helper that preserves the blob byte-for-byte.
+DTBH_MODE=false
+if [[ "$BOOT_FILE" == "boot.img" ]] && \
+        python3 "$SRC_DIR/unica/patches/fs/dtbh_bootimg.py" check \
+            --boot_img "$TMP_DIR/$BOOT_FILE" 2>/dev/null; then
+    DTBH_MODE=true
+fi
+
+if $DTBH_MODE; then
+    EVAL "python3 \"$SRC_DIR/unica/patches/fs/dtbh_bootimg.py\" unpack --boot_img \"$TMP_DIR/$BOOT_FILE\" --out \"$TMP_DIR/out\""
+else
+    MKBOOTIMG_ARGS="$(unpack_bootimg --boot_img "$TMP_DIR/$BOOT_FILE" --out "$TMP_DIR/out" --format mkbootimg 2>&1)"
+fi
 
 while IFS= read -r f; do
     LOG "- Extracting $BOOT_FILE/$(basename "$f")"
@@ -76,7 +94,10 @@ PATCH_FSTAB "$WORK_DIR/vendor/etc"
 
 LOG "- Repacking $BOOT_FILE"
 
-if [[ "$BOOT_FILE" == "vendor_boot.img" ]]; then
+if $DTBH_MODE; then
+    EVAL "python3 \"$SRC_DIR/unica/patches/fs/dtbh_bootimg.py\" repack --dir \"$TMP_DIR/out\" --info \"$TMP_DIR/out/dtbh_info.json\" --out \"$TMP_DIR/new-boot.img\""
+    EVAL "mv -f \"$TMP_DIR/new-boot.img\" \"$WORK_DIR/kernel/boot.img\""
+elif [[ "$BOOT_FILE" == "vendor_boot.img" ]]; then
     EVAL "mkbootimg $MKBOOTIMG_ARGS --vendor_boot \"$WORK_DIR/kernel/vendor_boot.img\""
 else
     EVAL "mkbootimg $MKBOOTIMG_ARGS -o \"$TMP_DIR/new-boot.img\""
@@ -87,4 +108,5 @@ fi
 EVAL "rm -rf \"$TMP_DIR\""
 
 unset PARTITIONS_LIST BOOT_FILE MKBOOTIMG_ARGS RAMDISK_FILE RAMDISK_FORMAT
+unset DTBH_MODE
 unset -f PATCH_FSTAB
