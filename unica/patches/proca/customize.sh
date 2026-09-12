@@ -10,7 +10,14 @@ fi
 EVAL "mkdir -p \"$TMP_DIR\""
 EVAL "cp -a \"$WORK_DIR/kernel/boot.img\" \"$TMP_DIR/boot.img\""
 
-MKBOOTIMG_ARGS="$(unpack_bootimg --boot_img "$TMP_DIR/boot.img" --out "$TMP_DIR/out" --format mkbootimg 2>&1)"
+DTBH_MODE=false
+if python3 "$SRC_DIR/unica/patches/fs/dtbh_bootimg.py" check \
+        --boot_img "$TMP_DIR/boot.img" 2>/dev/null; then
+    DTBH_MODE=true
+    EVAL "python3 \"$SRC_DIR/unica/patches/fs/dtbh_bootimg.py\" unpack --boot_img \"$TMP_DIR/boot.img\" --out \"$TMP_DIR/out\""
+else
+    MKBOOTIMG_ARGS="$(unpack_bootimg --boot_img "$TMP_DIR/boot.img" --out "$TMP_DIR/out" --format mkbootimg 2>&1)"
+fi
 
 if [ ! -f "$TMP_DIR/out/kernel" ]; then
     ABORT "Failed to extract boot.img\n\n$MKBOOTIMG_ARGS"
@@ -47,7 +54,7 @@ fi
 if ! $PATCHED; then
     LOG "\033[0;33m! Nothing to do\033[0m"
     EVAL "rm -rf \"$TMP_DIR\""
-    unset MKBOOTIMG_ARGS GZ_COMPRESSED PATCHED PROCA_CONFIG_ADDR
+    unset MKBOOTIMG_ARGS GZ_COMPRESSED PATCHED PROCA_CONFIG_ADDR DTBH_MODE
     return 0
 fi
 
@@ -58,10 +65,14 @@ fi
 
 LOG "- Repacking boot.img"
 
-EVAL "mkbootimg $MKBOOTIMG_ARGS -o \"$TMP_DIR/new-boot.img\""
-echo -n "SEANDROIDENFORCE" >> "$TMP_DIR/new-boot.img"
+if $DTBH_MODE; then
+    EVAL "python3 \"$SRC_DIR/unica/patches/fs/dtbh_bootimg.py\" repack --dir \"$TMP_DIR/out\" --info \"$TMP_DIR/out/dtbh_info.json\" --out \"$TMP_DIR/new-boot.img\""
+else
+    EVAL "mkbootimg $MKBOOTIMG_ARGS -o \"$TMP_DIR/new-boot.img\""
+    echo -n "SEANDROIDENFORCE" >> "$TMP_DIR/new-boot.img"
+fi
 EVAL "mv -f \"$TMP_DIR/new-boot.img\" \"$WORK_DIR/kernel/boot.img\""
 
 EVAL "rm -rf \"$TMP_DIR\""
 
-unset MKBOOTIMG_ARGS GZ_COMPRESSED PATCHED PROCA_CONFIG_ADDR
+unset MKBOOTIMG_ARGS GZ_COMPRESSED PATCHED PROCA_CONFIG_ADDR DTBH_MODE

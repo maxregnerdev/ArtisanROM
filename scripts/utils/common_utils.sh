@@ -44,7 +44,11 @@ _GET_PROP_FILES_PATH()
                 )
                 ;;
             "product")
-                FILES+=("$WORK_DIR/product/etc/build.prop")
+                if $TARGET_OS_BUILD_PRODUCT_PARTITION; then
+                    FILES+=("$WORK_DIR/product/etc/build.prop")
+                else
+                    FILES+=("$WORK_DIR/system/system/product/etc/build.prop")
+                fi
                 ;;
             "system_ext")
                 FILES+=(
@@ -53,7 +57,14 @@ _GET_PROP_FILES_PATH()
                 )
                 ;;
             "odm")
-                FILES+=("$WORK_DIR/odm/etc/build.prop")
+                if $TARGET_OS_BUILD_ODM_PARTITION; then
+                    FILES+=("$WORK_DIR/odm/etc/build.prop")
+                else
+                    FILES+=(
+                        "$WORK_DIR/odm/etc/build.prop"
+                        "$WORK_DIR/vendor/odm/etc/build.prop"
+                    )
+                fi
                 ;;
             "vendor_dlkm")
                 FILES+=(
@@ -85,7 +96,9 @@ _GET_PROP_FILES_PATH()
             "$WORK_DIR/vendor/vendor_dlkm/etc/build.prop"
             "$WORK_DIR/vendor/odm_dlkm/etc/build.prop"
             "$WORK_DIR/odm/etc/build.prop"
+            "$WORK_DIR/vendor/odm/etc/build.prop"
             "$WORK_DIR/product/etc/build.prop"
+            "$WORK_DIR/system/system/product/etc/build.prop"
         )
     fi
 
@@ -125,7 +138,11 @@ _GET_SELINUX_LABEL()
 
     case "$PARTITION" in
         "product")
-            FC_FILE="$WORK_DIR/product/etc/selinux/product_file_contexts"
+            if $TARGET_OS_BUILD_PRODUCT_PARTITION; then
+                FC_FILE="$WORK_DIR/product/etc/selinux/product_file_contexts"
+            else
+                FC_FILE="$WORK_DIR/system/system/product/etc/selinux/product_file_contexts"
+            fi
             ;;
         "vendor")
             FC_FILE="$WORK_DIR/vendor/etc/selinux/vendor_file_contexts"
@@ -225,7 +242,23 @@ ADD_TO_WORK_DIR()
 
     local SOURCE_FILE="$SOURCE"
     local TARGET_FILE="$WORK_DIR"
-    if [[ "$PARTITION" == "system_ext" ]]; then
+    if [[ "$PARTITION" == "product" ]]; then
+        if [ -d "$SOURCE/product" ]; then
+            SOURCE_FILE+="/product/$FILE"
+        elif [ -d "$SOURCE/system/system/product" ]; then
+            SOURCE_FILE+="/system/system/product/$FILE"
+        else
+            SOURCE_FILE+="/system/product/$FILE"
+        fi
+
+        if $TARGET_OS_BUILD_PRODUCT_PARTITION; then
+            TARGET_FILE+="/product/$FILE"
+        else
+            PARTITION="system"
+            FILE="system/product/$FILE"
+            TARGET_FILE+="/system/$FILE"
+        fi
+    elif [[ "$PARTITION" == "system_ext" ]]; then
         if [ -d "$SOURCE/system_ext" ]; then
             SOURCE_FILE+="/system_ext/$FILE"
         elif [ -d "$SOURCE/system/system/system_ext" ]; then
@@ -240,6 +273,20 @@ ADD_TO_WORK_DIR()
             PARTITION="system"
             FILE="system/system_ext/$FILE"
             TARGET_FILE+="/system/$FILE"
+        fi
+    elif [[ "$PARTITION" == "odm" ]]; then
+        if [ -d "$SOURCE/odm" ]; then
+            SOURCE_FILE+="/odm/$FILE"
+        elif [ -d "$SOURCE/vendor/odm" ]; then
+            SOURCE_FILE+="/vendor/odm/$FILE"
+        fi
+
+        if $TARGET_OS_BUILD_ODM_PARTITION; then
+            TARGET_FILE+="/odm/$FILE"
+        else
+            PARTITION="vendor"
+            FILE="odm/$FILE"
+            TARGET_FILE+="/$FILE"
         fi
     elif [[ "$PARTITION" == "system" ]]; then
         if [ -d "$SOURCE/system/system" ]; then
@@ -317,6 +364,7 @@ ADD_TO_WORK_DIR()
         FILES="${FILES//$SOURCE\//}"
         [[ "$PARTITION" == "system" ]] && FILES="${FILES//system\/system\//system/}"
         $TARGET_OS_BUILD_SYSTEM_EXT_PARTITION || FILES="${FILES//system_ext\//system/system_ext/}"
+        $TARGET_OS_BUILD_PRODUCT_PARTITION || FILES="${FILES//product\//system/product/}"
 
         while IFS= read -r f; do
             IS_VALID_PARTITION_NAME "$f" && continue
@@ -351,6 +399,43 @@ ADD_TO_WORK_DIR()
                 fi
             fi
         done <<< "$FILES"
+
+        local TMP="$ENTRY"
+        TMP="$(dirname "$TMP")"
+        [[ "$PARTITION" == "system" ]] && TMP="${TMP//system\/system\//system/}"
+
+        while [[ "$TMP" != "." ]]; do
+            IS_VALID_PARTITION_NAME "$TMP" && break
+
+            if ! grep -q -F "$TMP " "$WORK_DIR/configs/fs_config-$PARTITION" 2> /dev/null; then
+                if grep -q -F "$TMP " "$SOURCE/fs_config-$PARTITION" 2> /dev/null; then
+                    grep -F "$TMP " "$SOURCE/fs_config-$PARTITION" >> "$WORK_DIR/configs/fs_config-$PARTITION"
+                else
+                    LOGW "No fs_config entry found for \"$TMP\" in \"${SOURCE//$SRC_DIR\//}\". Using default values"
+
+                    USER=0
+                    GROUP=0
+                    MODE=755
+                    [[ "$PARTITION" == "vendor" ]] && GROUP=2000
+
+                    echo "$TMP $USER $GROUP $MODE capabilities=0x0" >> "$WORK_DIR/configs/fs_config-$PARTITION"
+                fi
+            fi
+
+            if ! grep -q -F "/$(_HANDLE_SPECIAL_CHARS "$TMP") " "$WORK_DIR/configs/file_context-$PARTITION" 2> /dev/null; then
+                if grep -q -F "/$(_HANDLE_SPECIAL_CHARS "$TMP") " "$SOURCE/file_context-$PARTITION" 2> /dev/null; then
+                    grep -F "/$(_HANDLE_SPECIAL_CHARS "$TMP") " "$SOURCE/file_context-$PARTITION" >> "$WORK_DIR/configs/file_context-$PARTITION"
+                else
+                    LOGW "No file_context entry found for \"$TMP\" in \"${SOURCE//$SRC_DIR\//}\". Using default value"
+
+                    LABEL="$(_GET_SELINUX_LABEL "$PARTITION" "/$TMP")"
+
+                    echo "/$(_HANDLE_SPECIAL_CHARS "$TMP") $LABEL" >> "$WORK_DIR/configs/file_context-$PARTITION"
+                fi
+            fi
+
+            TMP="$(dirname "$TMP")"
+        done
     else
         local TMP="${TARGET_FILE%/.}"
         TMP="$(dirname "${TMP//$WORK_DIR\//}")"
@@ -416,14 +501,36 @@ DELETE_FROM_WORK_DIR()
         PARTITION="system"
         FILE="system/system_ext/$FILE"
     fi
+    if ! $TARGET_OS_BUILD_PRODUCT_PARTITION && [[ "$PARTITION" == "product" ]]; then
+        PARTITION="system"
+        FILE="system/product/$FILE"
+    fi
+    if ! $TARGET_OS_BUILD_ODM_PARTITION && [[ "$PARTITION" == "odm" ]]; then
+        PARTITION="vendor"
+        FILE="odm/$FILE"
+    fi
 
     local FILE_PATH="$WORK_DIR"
     case "$PARTITION" in
+        "product")
+            if $TARGET_OS_BUILD_PRODUCT_PARTITION; then
+                FILE_PATH+="/product"
+            else
+                FILE_PATH+="/system/system/product"
+            fi
+            ;;
         "system_ext")
             if $TARGET_OS_BUILD_SYSTEM_EXT_PARTITION; then
                 FILE_PATH+="/system_ext"
             else
                 FILE_PATH+="/system/system/system_ext"
+            fi
+            ;;
+        "odm")
+            if $TARGET_OS_BUILD_ODM_PARTITION; then
+                FILE_PATH+="/odm"
+            else
+                FILE_PATH+="/vendor/odm"
             fi
             ;;
         *)
@@ -553,7 +660,8 @@ IS_VALID_PARTITION_NAME()
     # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#131
     [[ "$PARTITION" == "system" ]] || [[ "$PARTITION" == "vendor" ]] || [[ "$PARTITION" == "product" ]] || \
         [[ "$PARTITION" == "system_ext" ]] || [[ "$PARTITION" == "odm" ]] || [[ "$PARTITION" == "vendor_dlkm" ]] || \
-        [[ "$PARTITION" == "odm_dlkm" ]] || [[ "$PARTITION" == "system_dlkm" ]]
+        [[ "$PARTITION" == "odm_dlkm" ]] || [[ "$PARTITION" == "system_dlkm" ]] || [[ "$PARTITION" == "optics" ]] || \
+        [[ "$PARTITION" == "prism" ]]
 }
 
 # READ_BYTES_AT <file> <offset> <bytes>
@@ -705,10 +813,18 @@ SET_PROP()
                 FILE="$WORK_DIR/vendor/odm_dlkm/etc/build.prop"
                 ;;
             "odm")
-                FILE="$WORK_DIR/odm/etc/build.prop"
+                if $TARGET_OS_BUILD_ODM_PARTITION; then
+                    FILE="$WORK_DIR/odm/etc/build.prop"
+                else
+                    FILE="$WORK_DIR/vendor/odm/etc/build.prop"
+                fi
                 ;;
             "product")
-                FILE="$WORK_DIR/product/etc/build.prop"
+                if $TARGET_OS_BUILD_PRODUCT_PARTITION; then
+                    FILE="$WORK_DIR/product/etc/build.prop"
+                else
+                    FILE="$WORK_DIR/system/system/product/etc/build.prop"
+                fi
                 ;;
         esac
 

@@ -21,3 +21,7 @@ security/artisanrom_platform.pk8
 !.gitattributes
 !.gitignore
 !.gitmodules
+
+# Python bytecode
+__pycache__/
+*.pyc

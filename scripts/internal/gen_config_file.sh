@@ -149,8 +149,16 @@ fi
 #   TARGET_VENDOR_BOOT_PARTITION_SIZE
 #     Integer containing the size in bytes of the target device vendor_boot partition size.
 #
+#   TARGET_CACHE_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device cache partition size.
+#
+#   TARGET_USE_DYNAMIC_PARTITIONS
+#     Boolean which describes whether the device has dynamic partitions support.
+#     Defaults to false.
+#
 #   TARGET_SUPER_PARTITION_SIZE
 #     Integer containing the size in bytes of the target device super partition size, which can be checked using the lpdump tool.
+#     Required if TARGET_USE_DYNAMIC_PARTITIONS is set to true.
 #     Notice this must be bigger than TARGET_${TARGET_SUPER_GROUP_NAME}_SIZE.
 #
 #   [SOURCE/TARGET]_SUPER_GROUP_NAME
@@ -159,7 +167,44 @@ fi
 #
 #   TARGET_${TARGET_SUPER_GROUP_NAME}_SIZE
 #     Integer containing the size in bytes of the target device super group size, which can be checked using the lpdump tool.
+#     Required if TARGET_USE_DYNAMIC_PARTITIONS is set to true.
 #     Notice this must be smaller than TARGET_SUPER_PARTITION_SIZE.
+#
+#   TARGET_SYSTEM_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device system partition size.
+#     Unused if TARGET_USE_DYNAMIC_PARTITIONS is set to true.
+#
+#   TARGET_VENDOR_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device vendor partition size.
+#     Unused if TARGET_USE_DYNAMIC_PARTITIONS is set to true.
+#
+#   TARGET_PRODUCT_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device product partition size.
+#     Unused if TARGET_USE_DYNAMIC_PARTITIONS is set to true.
+#
+#   TARGET_ODM_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device odm partition size.
+#     Unused if TARGET_USE_DYNAMIC_PARTITIONS is set to true.
+#
+#   TARGET_VENDOR_DLKM_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device vendor_dlkm partition size.
+#     Unused if TARGET_USE_DYNAMIC_PARTITIONS is set to true.
+#
+#   TARGET_ODM_DLKM_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device odm_dlkm partition size.
+#     Unused if TARGET_USE_DYNAMIC_PARTITIONS is set to true.
+#
+#   TARGET_SYSTEM_DLKM_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device system_dlkm partition size.
+#     Unused if TARGET_USE_DYNAMIC_PARTITIONS is set to true.
+#
+#   TARGET_PRISM_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device prism partition size.
+#     Default to 400Mb (419430400 in bytes)
+#
+#   TARGET_OPTICS_PARTITION_SIZE
+#     Integer containing the size in bytes of the target device optics partition size.
+#     Default to 20Mb (20971520 in bytes)
 #
 #   TARGET_OS_SINGLE_SYSTEM_IMAGE
 #     String containing the target device SSI, it must match the `ro.build.product` prop.
@@ -170,8 +215,14 @@ fi
 #     Defaults to "erofs".
 #     Using a different value than stock will require patching the device fstab file in vendor and kernel ramdisk.
 #
+#   TARGET_OS_BUILD_PRODUCT_PARTITION
+#     If set to true, product partition will be built.
+#
 #   TARGET_OS_BUILD_SYSTEM_EXT_PARTITION
 #     If set to true, system_ext partition will be built.
+#
+#   TARGET_OS_BUILD_ODM_PARTITION
+#     If set to true, odm partition will be built.
 #
 #   TARGET_OS_BOOT_DEVICE_PATH
 #     String containing the path to the target device block devices.
@@ -465,13 +516,29 @@ fi
     GET_BUILD_VAR "TARGET_LK3RD_PARTITION_SIZE" "none"
     GET_BUILD_VAR "TARGET_INIT_BOOT_PARTITION_SIZE" "none"
     GET_BUILD_VAR "TARGET_VENDOR_BOOT_PARTITION_SIZE" "none"
-    GET_BUILD_VAR "TARGET_SUPER_PARTITION_SIZE"
-    GET_BUILD_VAR "SOURCE_SUPER_GROUP_NAME"
-    GET_BUILD_VAR "TARGET_SUPER_GROUP_NAME" "$SOURCE_SUPER_GROUP_NAME"
-    GET_BUILD_VAR "TARGET_$(tr "[:lower:]" "[:upper:]" <<< "${TARGET_SUPER_GROUP_NAME:-$SOURCE_SUPER_GROUP_NAME}")_SIZE"
+    GET_BUILD_VAR "TARGET_CACHE_PARTITION_SIZE" "none"
+    GET_BUILD_VAR "TARGET_USE_DYNAMIC_PARTITIONS" "false"
+    if ${TARGET_USE_DYNAMIC_PARTITIONS:-false}; then
+        GET_BUILD_VAR "TARGET_SUPER_PARTITION_SIZE"
+        GET_BUILD_VAR "SOURCE_SUPER_GROUP_NAME"
+        GET_BUILD_VAR "TARGET_SUPER_GROUP_NAME" "$SOURCE_SUPER_GROUP_NAME"
+        GET_BUILD_VAR "TARGET_$(tr "[:lower:]" "[:upper:]" <<< "${TARGET_SUPER_GROUP_NAME:-$SOURCE_SUPER_GROUP_NAME}")_SIZE"
+    else
+        GET_BUILD_VAR "TARGET_SYSTEM_PARTITION_SIZE" "none"
+        GET_BUILD_VAR "TARGET_VENDOR_PARTITION_SIZE" "none"
+        GET_BUILD_VAR "TARGET_PRODUCT_PARTITION_SIZE" "none"
+        GET_BUILD_VAR "TARGET_ODM_PARTITION_SIZE" "none"
+        GET_BUILD_VAR "TARGET_VENDOR_DLKM_PARTITION_SIZE" "none"
+        GET_BUILD_VAR "TARGET_ODM_DLKM_PARTITION_SIZE" "none"
+        GET_BUILD_VAR "TARGET_SYSTEM_DLKM_PARTITION_SIZE" "none"
+    fi
+    GET_BUILD_VAR "TARGET_PRISM_PARTITION_SIZE" "419430400"
+    GET_BUILD_VAR "TARGET_OPTICS_PARTITION_SIZE" "20971520"
     GET_BUILD_VAR "TARGET_OS_SINGLE_SYSTEM_IMAGE"
     GET_BUILD_VAR "TARGET_OS_FILE_SYSTEM_TYPE" "erofs"
-    GET_BUILD_VAR "TARGET_OS_BUILD_SYSTEM_EXT_PARTITION"
+    GET_BUILD_VAR "TARGET_OS_BUILD_PRODUCT_PARTITION" "false"
+    GET_BUILD_VAR "TARGET_OS_BUILD_SYSTEM_EXT_PARTITION" "false"
+    GET_BUILD_VAR "TARGET_OS_BUILD_ODM_PARTITION" "false"
     GET_BUILD_VAR "TARGET_OS_BOOT_DEVICE_PATH" "/dev/block/bootdevice/by-name"
     GET_BUILD_VAR "SOURCE_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION" "none"
     GET_BUILD_VAR "TARGET_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION" "none"
